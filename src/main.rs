@@ -85,7 +85,8 @@ impl OpCode {
 }
 
 pub struct Instruction {
-    condition: Condition,
+    instruction_type: InstructionType,
+    condition: u8,
     immediate: bool,
     opcode: OpCode,
     set_state: bool,
@@ -94,80 +95,119 @@ pub struct Instruction {
     operand_2: u16,
 }
 
-pub struct Condition {
-    z: bool, // Equal
-    c: bool, // Carry
-    n: bool, // Negative
-    v: bool, // Overflow
+#[derive(PartialEq)]
+pub enum Condition {
+    EQ,
+    NE,
+    CS,
+    CC,
+    MI,
+    PL,
+    VS,
+    VC,
+    HI,
+    LS,
+    GE,
+    LT,
+    GT,
+    LE,
+    AL,
+    NV,
+    INVALID,
 }
 
-fn decode_condition(condition: u8) -> Condition {
-    let z = 0;
-    let c = 1;
-    let n = 2;
-    let v = 3;
+impl Condition {
+    // Important: The way the conditions are encoded in the instruction differ from
+    // how they'll be compared to the cpsr. The CPSR => |N|Z|C|V|
+    pub fn is_met(&self, cpsr_condition: u8) -> bool{
+        match self {
+            // Simple Conditions
+            Condition::EQ => (cpsr_condition & 0b0100) != 0, // Z == 1
+            Condition::NE => (cpsr_condition & 0b0100) == 0, // Z == 0
+            Condition::CS => (cpsr_condition & 0b0010) != 0, // C == 1
+            Condition::CC => (cpsr_condition & 0b0010) == 0, // C == 0
+            Condition::MI => (cpsr_condition & 0b1000) != 0, // N == 1
+            Condition::PL => (cpsr_condition & 0b1000) == 0, // N == 0
+            Condition::VS => (cpsr_condition & 0b0001) != 0, // V == 1
+            Condition::VC => (cpsr_condition & 0b0001) == 0, // V == 0
 
-    let mut condition = Condition {
-        z: (condition & (1 << z)) != 0,
-        c: (condition & (1 << c)) != 0,
-        n: (condition & (1 << n)) != 0,
-        v: (condition & (1 << v)) != 0,
-    };
+            // Complex Conditions
+            Condition::HI => (cpsr_condition & 0b0010) != 0 && (cpsr_condition & 0b0100) == 0, // C == 1 && Z == 0
+            Condition::LS => (cpsr_condition & 0b0000) != 0,
+            Condition::GE => (cpsr_condition & 0b0000) != 0,
+            Condition::LT => (cpsr_condition & 0b0000) != 0,
+            Condition::GT => (cpsr_condition & 0b0000) != 0,
+            Condition::LE => (cpsr_condition & 0b0000) != 0,
+            Condition::NV => (cpsr_condition & 0b0000) != 0,
 
-    condition
-}
+            // Special Conditions
+            Condition::AL => true,
+            Condition::INVALID => false,
+        }
 
-fn condition_to_mnemonic(condition_code: u8) -> &'static str {
-    match condition_code {
-        0b0000 => "EQ", // Equal (Z == 1)
-        0b0001 => "NE", // Not Equal (Z == 0)
-        0b0010 => "CS", // Carry Set (C == 1)
-        0b0011 => "CC", // Carry Clear (C == 0)
-        0b0100 => "MI", // Negative (N == 1)
-        0b0101 => "PL", // Positive or Zero (N == 0)
-        0b0110 => "VS", // Overflow Set (V == 1)
-        0b0111 => "VC", // Overflow Clear (V == 0)
-        0b1000 => "HI", // Unsigned Higher (C == 1 and Z == 0)
-        0b1001 => "LS", // Unsigned Lower or Same (C == 0 or Z == 1)
-        0b1010 => "GE", // Signed Greater Than or Equal (N == V)
-        0b1011 => "LT", // Signed Less Than (N != V)
-        0b1100 => "GT", // Signed Greater Than (Z == 0 and N == V)
-        0b1101 => "LE", // Signed Less Than or Equal (Z == 1 or N != V)
-        0b1110 => "AL", // Always (unconditional)
-        0b1111 => "NV", // Never (reserved)
-        _ => "Invalid", // For safety
     }
+    pub fn from_u8(condition: u8) -> Condition {
+        match condition {
+            0b0000 => Condition::EQ, // Equal (Z == 1)
+            0b0001 => Condition::NE, // Not Equal (Z == 0)
+            0b0010 => Condition::CS, // Carry Set (C == 1)
+            0b0011 => Condition::CC, // Carry Clear (C == 0)
+            0b0100 => Condition::MI, // Negative (N == 1)
+            0b0101 => Condition::PL, // Positive or Zero (N == 0)
+            0b0110 => Condition::VS, // Overflow Set (V == 1)
+            0b0111 => Condition::VC, // Overflow Clear (V == 0)
+            0b1000 => Condition::HI, // Unsigned Higher (C == 1 and Z == 0)
+            0b1001 => Condition::LS, // Unsigned Lower or Same (C == 0 or Z == 1)
+            0b1010 => Condition::GE, // Signed Greater Than or Equal (N == V)
+            0b1011 => Condition::LT, // Signed Less Than (N != V)
+            0b1100 => Condition::GT, // Signed Greater Than (Z == 0 and N == V)
+            0b1101 => Condition::LE, // Signed Less Than or Equal (Z == 1 or N != V)
+            0b1110 => Condition::AL, // Always (unconditional)
+            0b1111 => Condition::NV, // Never (reserved)
+            _ => Condition::INVALID, // For safety
+        }
+    }
+}
+
+pub enum InstructionType {
+    DataProcessing,
+    Undefined,
+}
+
+fn decode_data_processing_instruction(instruction: u32) -> Result<Instruction, ()> {
+    let condition_mask = 0b1111_0000_0000_0000_0000_0000_0000_0000;
+    let immediate_mode_mask = 0b0000_0010_0000_0000_0000_0000_0000_0000;
+    let opcode_mask = 0b0000_0001_1110_0000_0000_0000_0000_0000;
+    let set_status_mask = 0b0000_0000_0001_0000_0000_0000_0000_0000;
+    let source_register_mask = 0b0000_0000_0000_1111_0000_0000_0000_0000;
+    let destination_register_mask = 0b0000_0000_0000_0000_1111_0000_0000_0000;
+    let operand_2_mask = 0b0000_0000_0000_0000_0000_1111_1111_1111;
+
+    let condition = ((instruction & condition_mask) >> 28) as u8;
+    let immediate_mode = ((instruction & immediate_mode_mask) >> 25) as u8;
+    let opcode = ((instruction & opcode_mask) >> 21) as u8;
+    let set_status = ((instruction & set_status_mask) >> 20) as u8;
+    let src_register = ((instruction & source_register_mask) >> 16) as u8;
+    let dest_register = ((instruction & destination_register_mask) >> 12) as u8;
+    let operand_2 = ((instruction & operand_2_mask) >> 0) as u16;
+
+    Ok(Instruction {
+        instruction_type: InstructionType::DataProcessing,
+        condition,
+        immediate: immediate_mode != 0,
+        opcode: OpCode::from_u8(opcode),
+        set_state: set_status != 0,
+        src_register,
+        dest_register,
+        operand_2,
+    })
 }
 
 fn decode_instruction(instruction: u32) -> Result<Instruction, ()> {
     let data_processing_mask = 0b0000_0011_1111_1111_1111_1111_1111_1111;
 
     if instruction & data_processing_mask != 0 {
-        let condition_mask = 0b1111_0000_0000_0000_0000_0000_0000_0000;
-        let immediate_mode_mask = 0b0000_0010_0000_0000_0000_0000_0000_0000;
-        let opcode_mask = 0b0000_0001_1110_0000_0000_0000_0000_0000;
-        let set_status_mask = 0b0000_0000_0001_0000_0000_0000_0000_0000;
-        let source_register_mask = 0b0000_0000_0000_1111_0000_0000_0000_0000;
-        let destination_register_mask = 0b0000_0000_0000_0000_1111_0000_0000_0000;
-        let operand_2_mask = 0b0000_0000_0000_0000_0000_1111_1111_1111;
-
-        let condition = ((instruction & condition_mask) >> 28) as u8;
-        let immediate_mode = ((instruction & immediate_mode_mask) >> 25) as u8;
-        let opcode = ((instruction & opcode_mask) >> 21) as u8;
-        let set_status = ((instruction & set_status_mask) >> 20) as u8;
-        let source_register = ((instruction & source_register_mask) >> 16) as u8;
-        let destination_register = ((instruction & destination_register_mask) >> 12) as u8;
-        let operand_2 = ((instruction & operand_2_mask) >> 0) as u16;
-
-        Ok(Instruction {
-            operand_2,
-            condition: decode_condition(condition),
-            immediate: immediate_mode != 0,
-            opcode: OpCode::from_u8(opcode),
-            set_state: set_status != 0,
-            src_register: source_register,
-            dest_register: destination_register,
-        })
+        decode_data_processing_instruction(instruction)
     } else {
         Err(())
     }
@@ -177,6 +217,18 @@ fn execute_instruction(instruction: &Instruction, registers: &mut Registers) {
     let mut destination: u32 = registers.gpr[instruction.dest_register as usize];
     let source: u32 = registers.gpr[instruction.src_register as usize];
     let operand = instruction.operand_2 as u32;
+
+    // Check Conditions
+    let condition = Condition::from_u8(instruction.condition);
+    if  condition != Condition::AL {
+        let cpsr_condition_mask = 0b1111_0000_0000_0000_0000_0000_0000_0000;
+        let current_condition = (( registers.cpsr & cpsr_condition_mask ) >> 28) as u8;
+
+        if (instruction.condition & current_condition) != instruction.condition {
+            return;
+        }
+
+    }
 
     match instruction.opcode {
         OpCode::ADD => {
