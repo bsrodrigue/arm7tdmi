@@ -1,11 +1,15 @@
+mod conditions;
+mod tests;
+
 mod memory {
     pub struct Memory {
+        // Maybe you could use Box<[u8]>
         pub ram: Vec<u8>,
     }
 
     impl Memory {
-        pub fn new() -> Memory {
-            Memory {
+        pub fn new() -> Self {
+            Self {
                 ram: vec![0; 0xffffffff],
             }
         }
@@ -35,6 +39,7 @@ mod cpu {
     }
 }
 
+use crate::conditions::Condition;
 use cpu::Registers;
 use memory::Memory;
 
@@ -94,86 +99,12 @@ pub struct Instruction {
     dest_register: u8,
     operand_2: u16,
 }
-
-#[derive(PartialEq)]
-pub enum Condition {
-    EQ,
-    NE,
-    CS,
-    CC,
-    MI,
-    PL,
-    VS,
-    VC,
-    HI,
-    LS,
-    GE,
-    LT,
-    GT,
-    LE,
-    AL,
-    NV,
-    INVALID,
-}
-
-impl Condition {
-    // Important: The way the conditions are encoded in the instruction differ from
-    // how they'll be compared to the cpsr. The CPSR => |N|Z|C|V|
-    pub fn is_met(&self, cpsr_condition: u8) -> bool{
-        match self {
-            // Simple Conditions
-            Condition::EQ => (cpsr_condition & 0b0100) != 0, // Z == 1
-            Condition::NE => (cpsr_condition & 0b0100) == 0, // Z == 0
-            Condition::CS => (cpsr_condition & 0b0010) != 0, // C == 1
-            Condition::CC => (cpsr_condition & 0b0010) == 0, // C == 0
-            Condition::MI => (cpsr_condition & 0b1000) != 0, // N == 1
-            Condition::PL => (cpsr_condition & 0b1000) == 0, // N == 0
-            Condition::VS => (cpsr_condition & 0b0001) != 0, // V == 1
-            Condition::VC => (cpsr_condition & 0b0001) == 0, // V == 0
-
-            // Complex Conditions
-            Condition::HI => (cpsr_condition & 0b0010) != 0 && (cpsr_condition & 0b0100) == 0, // C == 1 && Z == 0
-            Condition::LS => (cpsr_condition & 0b0000) != 0,
-            Condition::GE => (cpsr_condition & 0b0000) != 0,
-            Condition::LT => (cpsr_condition & 0b0000) != 0,
-            Condition::GT => (cpsr_condition & 0b0000) != 0,
-            Condition::LE => (cpsr_condition & 0b0000) != 0,
-            Condition::NV => (cpsr_condition & 0b0000) != 0,
-
-            // Special Conditions
-            Condition::AL => true,
-            Condition::INVALID => false,
-        }
-
-    }
-    pub fn from_u8(condition: u8) -> Condition {
-        match condition {
-            0b0000 => Condition::EQ, // Equal (Z == 1)
-            0b0001 => Condition::NE, // Not Equal (Z == 0)
-            0b0010 => Condition::CS, // Carry Set (C == 1)
-            0b0011 => Condition::CC, // Carry Clear (C == 0)
-            0b0100 => Condition::MI, // Negative (N == 1)
-            0b0101 => Condition::PL, // Positive or Zero (N == 0)
-            0b0110 => Condition::VS, // Overflow Set (V == 1)
-            0b0111 => Condition::VC, // Overflow Clear (V == 0)
-            0b1000 => Condition::HI, // Unsigned Higher (C == 1 and Z == 0)
-            0b1001 => Condition::LS, // Unsigned Lower or Same (C == 0 or Z == 1)
-            0b1010 => Condition::GE, // Signed Greater Than or Equal (N == V)
-            0b1011 => Condition::LT, // Signed Less Than (N != V)
-            0b1100 => Condition::GT, // Signed Greater Than (Z == 0 and N == V)
-            0b1101 => Condition::LE, // Signed Less Than or Equal (Z == 1 or N != V)
-            0b1110 => Condition::AL, // Always (unconditional)
-            0b1111 => Condition::NV, // Never (reserved)
-            _ => Condition::INVALID, // For safety
-        }
-    }
-}
-
 pub enum InstructionType {
     DataProcessing,
     Undefined,
 }
 
+// Your decoding is wrong...
 fn decode_data_processing_instruction(instruction: u32) -> Result<Instruction, ()> {
     let condition_mask = 0b1111_0000_0000_0000_0000_0000_0000_0000;
     let immediate_mode_mask = 0b0000_0010_0000_0000_0000_0000_0000_0000;
@@ -219,15 +150,8 @@ fn execute_instruction(instruction: &Instruction, registers: &mut Registers) {
     let operand = instruction.operand_2 as u32;
 
     // Check Conditions
-    let condition = Condition::from_u8(instruction.condition);
-    if  condition != Condition::AL {
-        let cpsr_condition_mask = 0b1111_0000_0000_0000_0000_0000_0000_0000;
-        let current_condition = (( registers.cpsr & cpsr_condition_mask ) >> 28) as u8;
-
-        if (instruction.condition & current_condition) != instruction.condition {
-            return;
-        }
-
+    if !Condition::from_u8(instruction.condition).is_met(((registers.cpsr >> 28) & 0xF) as u8) {
+        return;
     }
 
     match instruction.opcode {
@@ -245,7 +169,8 @@ fn execute_instruction(instruction: &Instruction, registers: &mut Registers) {
             if instruction.immediate {
                 destination = operand;
             } else {
-                //TODO: Handle non immediate move
+                let operand = registers.gpr[instruction.operand_2 as usize];
+                destination = operand;
             }
             registers.gpr[instruction.dest_register as usize] = destination;
         }
@@ -263,17 +188,26 @@ fn main() {
     let mut memory = Memory::new();
 
     // Instructions are 32bit in ARM mode (arm7tdmi)
+    // Unconditional Instructions
     write_word(&mut memory, 0x0, 0xE3A0000A); // mov r0, #10
     write_word(&mut memory, 0x4, 0xE3A01014); // mov r1, #20
     write_word(&mut memory, 0x8, 0xE0800001); // add r0, r0, r1
+
+    // Conditional Instructions
+    write_word(&mut memory, 0xC, 0x03A02005); // moveq r2, #5 (execute if Z == 1)
+    write_word(&mut memory, 0x10, 0x13A0300A); // movne r3, #10 (execute if Z == 0)
+    write_word(&mut memory, 0x14, 0x23A0400F); // movcs r4, #15 (execute if C == 1)
+    write_word(&mut memory, 0x18, 0x33A05014); // movcc r5, #20 (execute if C == 0)
+    write_word(&mut memory, 0x1C, 0x93A0601E); // movls r6, #30 (execute if C == 0 or Z == 1)
+    write_word(&mut memory, 0x20, 0xA3A07019); // movge r7, #25 (execute if N == V)
+    write_word(&mut memory, 0x24, 0xB3A08020); // movlt r8, #32 (execute if N != V)
 
     let mut registers = Registers::new();
 
     registers.pc = 0x0;
 
     // Pipeline
-    for i in 1..3 {
-        // Execute three instructions
+    for i in 1..10 {
         let fetched_instruction = fetch_instruction(&memory, registers.pc);
         registers.pc += 0x4;
         let instruction = decode_instruction(fetched_instruction).unwrap();
