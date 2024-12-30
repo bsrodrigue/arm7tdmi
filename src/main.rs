@@ -185,32 +185,5 @@ fn fetch_instruction(memory: &Memory, address: u32) -> u32 {
 }
 
 fn main() {
-    let mut memory = Memory::new();
 
-    // Instructions are 32bit in ARM mode (arm7tdmi)
-    // Unconditional Instructions
-    write_word(&mut memory, 0x0, 0xE3A0000A); // mov r0, #10
-    write_word(&mut memory, 0x4, 0xE3A01014); // mov r1, #20
-    write_word(&mut memory, 0x8, 0xE0800001); // add r0, r0, r1
-
-    // Conditional Instructions
-    write_word(&mut memory, 0xC, 0x03A02005); // moveq r2, #5 (execute if Z == 1)
-    write_word(&mut memory, 0x10, 0x13A0300A); // movne r3, #10 (execute if Z == 0)
-    write_word(&mut memory, 0x14, 0x23A0400F); // movcs r4, #15 (execute if C == 1)
-    write_word(&mut memory, 0x18, 0x33A05014); // movcc r5, #20 (execute if C == 0)
-    write_word(&mut memory, 0x1C, 0x93A0601E); // movls r6, #30 (execute if C == 0 or Z == 1)
-    write_word(&mut memory, 0x20, 0xA3A07019); // movge r7, #25 (execute if N == V)
-    write_word(&mut memory, 0x24, 0xB3A08020); // movlt r8, #32 (execute if N != V)
-
-    let mut registers = Registers::new();
-
-    registers.pc = 0x0;
-
-    // Pipeline
-    for i in 1..10 {
-        let fetched_instruction = fetch_instruction(&memory, registers.pc);
-        registers.pc += 0x4;
-        let instruction = decode_instruction(fetched_instruction).unwrap();
-        execute_instruction(&instruction, &mut registers);
-    }
 }
